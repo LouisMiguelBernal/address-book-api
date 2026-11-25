@@ -6,21 +6,26 @@ query never blocks the event loop.
 """
 
 import logging
-from typing import Annotated
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app import crud, geo
 from app.database import get_db
 from app.models import Address
-from app.schemas import AddressIn, AddressOut, NearbyAddressOut
+from app.schemas import MAX_DB_INT, AddressIn, AddressOut, NearbyAddressOut
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/addresses", tags=["addresses"])
 
 DbSession = Annotated[Session, Depends(get_db)]
+# Bounded so an out-of-range ID gets a 422 instead of overflowing SQLite (500).
+AddressId = Annotated[int, Path(ge=1, le=MAX_DB_INT, description="Address ID")]
+Limit = Annotated[int, Query(ge=1, le=1000, description="Maximum number of results")]
+
+_NOT_FOUND = {404: {"description": "Address not found"}}
 
 
 def _get_or_404(db: Session, address_id: int) -> Address:
@@ -36,8 +41,8 @@ def _get_or_404(db: Session, address_id: int) -> Address:
     "/nearby",
     response_model=list[NearbyAddressOut],
     summary="Find addresses within a distance of a point",
-    description="Returns every address within `radius_km` of (`lat`, `lon`), nearest first. "
-    "The radius is inclusive.",
+    description="Returns addresses within `radius_km` of (`lat`, `lon`), nearest first "
+    "(ties broken by ID). The radius is inclusive.",
 )
 def find_nearby_addresses(
     db: DbSession,
@@ -56,19 +61,16 @@ def find_nearby_addresses(
             examples=[5],
         ),
     ],
-) -> list[NearbyAddressOut]:
+    limit: Limit = 100,
+) -> list[dict[str, Any]]:
+    # The response model validates each ORM object once while serializing.
     return [
-        NearbyAddressOut(**AddressOut.model_validate(address).model_dump(), distance_km=round(distance, 3))
-        for address, distance in crud.find_nearby(db, lat, lon, radius_km)
+        {"address": address, "distance_km": round(distance, 3)}
+        for address, distance in crud.find_nearby(db, lat, lon, radius_km, limit)
     ]
 
 
-@router.post(
-    "",
-    response_model=AddressOut,
-    status_code=status.HTTP_201_CREATED,
-    summary="Create an address",
-)
+@router.post("", response_model=AddressOut, status_code=status.HTTP_201_CREATED, summary="Create an address")
 def create_address(data: AddressIn, db: DbSession) -> Address:
     return crud.create_address(db, data)
 
@@ -76,19 +78,14 @@ def create_address(data: AddressIn, db: DbSession) -> Address:
 @router.get("", response_model=list[AddressOut], summary="List addresses")
 def list_addresses(
     db: DbSession,
-    offset: Annotated[int, Query(ge=0)] = 0,
-    limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+    offset: Annotated[int, Query(ge=0, le=MAX_DB_INT, description="Number of addresses to skip")] = 0,
+    limit: Limit = 100,
 ) -> list[Address]:
     return crud.list_addresses(db, offset, limit)
 
 
-@router.get(
-    "/{address_id}",
-    response_model=AddressOut,
-    summary="Get one address",
-    responses={404: {"description": "Address not found"}},
-)
-def get_address(address_id: int, db: DbSession) -> Address:
+@router.get("/{address_id}", response_model=AddressOut, summary="Get one address", responses=_NOT_FOUND)
+def get_address(address_id: AddressId, db: DbSession) -> Address:
     return _get_or_404(db, address_id)
 
 
@@ -97,9 +94,9 @@ def get_address(address_id: int, db: DbSession) -> Address:
     response_model=AddressOut,
     summary="Update an address",
     description="Replaces every field of the address.",
-    responses={404: {"description": "Address not found"}},
+    responses=_NOT_FOUND,
 )
-def update_address(address_id: int, data: AddressIn, db: DbSession) -> Address:
+def update_address(address_id: AddressId, data: AddressIn, db: DbSession) -> Address:
     address = _get_or_404(db, address_id)
     return crud.update_address(db, address, data)
 
@@ -108,9 +105,9 @@ def update_address(address_id: int, data: AddressIn, db: DbSession) -> Address:
     "/{address_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete an address",
-    responses={404: {"description": "Address not found"}},
+    responses=_NOT_FOUND,
 )
-def delete_address(address_id: int, db: DbSession) -> Response:
+def delete_address(address_id: AddressId, db: DbSession) -> Response:
     address = _get_or_404(db, address_id)
     crud.delete_address(db, address)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -4,6 +4,7 @@ Routes call these functions instead of querying the database directly, which
 keeps HTTP concerns (status codes, errors) separate from persistence.
 """
 
+import heapq
 import logging
 
 from sqlalchemy import and_, or_, select
@@ -51,10 +52,13 @@ def delete_address(db: Session, address: Address) -> None:
     logger.info("Deleted address id=%s", address_id)
 
 
-def find_nearby(db: Session, lat: float, lon: float, radius_km: float) -> list[tuple[Address, float]]:
-    """Return ``(address, distance_km)`` pairs within ``radius_km``, nearest first.
+def find_nearby(
+    db: Session, lat: float, lon: float, radius_km: float, limit: int
+) -> list[tuple[Address, float]]:
+    """Return up to ``limit`` ``(address, distance_km)`` pairs within ``radius_km``.
 
-    Two steps:
+    Results are nearest first; equal distances are ordered by ID so the output is
+    deterministic. Two steps:
     1. SQL bounding-box filter on the indexed latitude/longitude columns, so the
        database only returns rows that could possibly be in range.
     2. Exact haversine distance in Python on those candidates.
@@ -69,19 +73,21 @@ def find_nearby(db: Session, lat: float, lon: float, radius_km: float) -> list[t
     stmt = select(Address).where(and_(Address.latitude.between(box.min_lat, box.max_lat), lon_condition))
     candidates = db.scalars(stmt).all()
 
-    results = []
+    matches = []
     for address in candidates:
         distance = geo.haversine_km(lat, lon, address.latitude, address.longitude)
         if distance <= radius_km:
-            results.append((address, distance))
-    results.sort(key=lambda pair: pair[1])
+            matches.append((address, distance))
+    # nsmallest keeps only `limit` items: O(n log limit) instead of sorting everything.
+    results = heapq.nsmallest(limit, matches, key=lambda pair: (pair[1], pair[0].id))
 
     logger.debug(
-        "Nearby search lat=%s lon=%s radius_km=%s: %d candidates, %d matches",
+        "Nearby search lat=%s lon=%s radius_km=%s: %d candidates, %d matches, %d returned",
         lat,
         lon,
         radius_km,
         len(candidates),
+        len(matches),
         len(results),
     )
     return results
