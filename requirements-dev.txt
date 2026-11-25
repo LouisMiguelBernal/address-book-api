@@ -1,4 +1,14 @@
+# Test and lint tools, fully pinned. Direct: pytest, pytest-cov, httpx, ruff.
 -r requirements.txt
-pytest==8.3.5
+certifi==2026.11.20
+colorama==0.4.6 ; sys_platform == "win32"
+coverage==7.17.5
+httpcore==1.0.9
 httpx==0.28.1
-ruff==0.11.8
+iniconfig==2.3.1
+packaging==26.4
+pluggy==1.7.0
+Pygments==2.21.0
+pytest==9.2.0
+pytest-cov==7.1.0
+ruff==0.17.6

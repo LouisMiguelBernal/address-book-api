@@ -7,8 +7,10 @@ requires-python = ">=3.12"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = [
-    # Emitted inside Starlette's TestClient, not by this project.
-    "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning",
+    # Any new warning fails the suite, so deprecations are noticed early.
+    "error",
+    # Emitted by Starlette's TestClient about its own HTTP client; not this project's code.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
 ]
 
 [tool.ruff]
