@@ -14,7 +14,7 @@ There is no GUI. Use the built-in Swagger UI at `/docs`.
 ### Windows (PowerShell)
 
 ```powershell
-git clone https://github.com/<your-github-username>/address-book-api.git
+git clone https://github.com/LouisMiguelBernal/address-book-api.git
 cd address-book-api
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -27,7 +27,7 @@ If PowerShell blocks `Activate.ps1`, run `Set-ExecutionPolicy -Scope Process -Ex
 ### macOS / Linux (bash)
 
 ```bash
-git clone https://github.com/<your-github-username>/address-book-api.git
+git clone https://github.com/LouisMiguelBernal/address-book-api.git
 cd address-book-api
 python3 -m venv .venv
 source .venv/bin/activate
