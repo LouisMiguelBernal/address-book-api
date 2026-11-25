@@ -1,5 +1,6 @@
 """Database engine, session factory and the request-scoped session dependency."""
 
+import sqlite3
 from collections.abc import Iterator
 
 from fastapi import Request
@@ -24,7 +25,7 @@ def create_db_engine(database_url: str) -> Engine:
     if is_sqlite:
 
         @event.listens_for(engine, "connect")
-        def _set_sqlite_pragmas(dbapi_connection, _connection_record) -> None:  # type: ignore[no-untyped-def]
+        def _set_sqlite_pragmas(dbapi_connection: sqlite3.Connection, _connection_record: object) -> None:
             # WAL lets readers proceed while a write is in progress
             # (SQLite still allows only one writer at a time).
             cursor = dbapi_connection.cursor()

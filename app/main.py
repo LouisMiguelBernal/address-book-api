@@ -4,6 +4,7 @@ Run with:  uvicorn app.main:app --reload
 """
 
 import logging
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -21,6 +22,15 @@ from app.logging_config import request_id_var, setup_logging
 from app.routers import addresses
 
 logger = logging.getLogger(__name__)
+
+# A client-supplied request ID is reused only if it is short and plain; anything
+# else (newlines, huge values) could forge or flood log lines, so a new ID is generated.
+_VALID_REQUEST_ID = re.compile(r"[A-Za-z0-9-]{1,64}")
+
+
+def _request_id_from(request: Request) -> str:
+    supplied = request.headers.get("X-Request-ID", "")
+    return supplied if _VALID_REQUEST_ID.fullmatch(supplied) else uuid.uuid4().hex[:12]
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -49,12 +59,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def log_requests(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-        """Tag the request with an ID and log method, path, status and duration."""
-        request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
+        """Tag the request with an ID; log method, path, status and duration.
+
+        Also the last line of defence: an unexpected exception is logged once with
+        its traceback and turned into a JSON 500 that still carries the request ID.
+        """
+        request_id = _request_id_from(request)
         token = request_id_var.set(request_id)
         start = time.perf_counter()
         try:
-            response = await call_next(request)
+            try:
+                response = await call_next(request)
+            except Exception:
+                logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+                response = JSONResponse(status_code=500, content={"detail": "Internal server error"})
             duration_ms = (time.perf_counter() - start) * 1000
             logger.info(
                 "%s %s -> %d (%.1f ms)",
@@ -66,16 +84,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # Returned to the client so a request can be matched to its log lines.
             response.headers["X-Request-ID"] = request_id
             return response
-        except Exception:
-            logger.exception("Unhandled error on %s %s", request.method, request.url.path)
-            raise
         finally:
             request_id_var.reset(token)
 
     @app.exception_handler(RequestValidationError)
     async def log_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
-        """Log rejected input, then return FastAPI's standard 422 response."""
-        logger.warning("Validation failed on %s %s: %s", request.method, request.url.path, exc.errors())
+        """Log which fields were rejected, then return FastAPI's standard 422 response.
+
+        Only field locations and error types are logged, never the submitted
+        values: addresses are personal data and must not end up in log files.
+        """
+        problems = [f"{'.'.join(str(part) for part in err['loc'])}: {err['type']}" for err in exc.errors()]
+        logger.warning(
+            "Validation failed on %s %s: %s", request.method, request.url.path, "; ".join(problems)
+        )
         return await request_validation_exception_handler(request, exc)
 
     app.include_router(addresses.router)
